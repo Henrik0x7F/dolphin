@@ -12,9 +12,11 @@
 #include <Windows.h>
 #endif
 
+#include <enet/enet.h>
 #include <SFML/Network.hpp>
 
 #include "Common/Flag.h"
+#include "Common/Network.h"
 #include "Core/HW/EXI/EXI_Device.h"
 
 class PointerWrap;
@@ -412,6 +414,75 @@ private:
     Common::Flag m_read_thread_shutdown;
     static void ReadThreadHandler(XLinkNetworkInterface* self);
 #endif
+  };
+
+  class ENetworkInterface : public NetworkInterface
+  {
+  public:
+      ENetworkInterface(CEXIETHERNET* eth_ref, std::string ip, std::uint16_t port):
+        NetworkInterface(eth_ref),
+        m_dest_ip(std::move(ip)),
+        m_dest_port(port)
+      {}
+
+      bool Activate() override;
+      void Deactivate() override;
+      bool IsActivated() override;
+      bool SendFrame(const u8* frame, u32 size) override;
+      bool RecvInit() override;
+      void RecvStart() override;
+      void RecvStop() override;
+
+  private:
+      enum struct Channel : u8
+      {
+        CONTROL,
+        ETH_FRAME,
+
+        COUNT
+      };
+
+      enum struct ControlMessage : u8
+      {
+        CONNECT,    // (6 bytes)[MAC Address] (1 byte)[Name len] (len bytes)[Name]
+        DISCONNECT,
+
+        COUNT
+      };
+
+      bool Send(const u8* data, u32 size, Channel channel);
+      void HandleEthFramePacket(const ENetPacket& packet);
+      void HandleControlPacket(const ENetPacket& packet);
+
+      bool SendConnectMsg(const Common::MACAddress& mac_addr, const std::string& name);
+      bool SendDisconnectMsg();
+
+
+      static void ServiceThread(ENetworkInterface* this_ptr);
+
+      static u32 ChannelFlags(Channel channel)
+      {
+        switch(channel)
+        {
+          case Channel::CONTROL:
+            return ENET_PACKET_FLAG_RELIABLE;
+          case Channel::ETH_FRAME:
+            return ENET_PACKET_FLAG_UNSEQUENCED | ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT;
+          default:
+            return 0;
+        }
+      }
+
+      ENetHost* m_host{};
+      ENetPeer* m_peer{};
+
+      std::string m_dest_ip;
+      std::uint16_t m_dest_port;
+
+      std::thread m_service_thread;
+      Common::Flag m_stop_service_thread;
+      Common::Flag m_read_enabled;
+      Common::Flag m_connected;
   };
 
   std::unique_ptr<NetworkInterface> m_network_interface;
